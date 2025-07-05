@@ -1,9 +1,6 @@
 ```
-npx tsc
-cd dist
-zip -r ../my-lambda-cleanup.zip index.js
-cd ..
-zip -r my-lambda-cleanup.zip node_modules
+npm run build
+zip -r my-lambda-cleanup.zip dist node_modules
 ```
 
 打包上傳 Lambda
