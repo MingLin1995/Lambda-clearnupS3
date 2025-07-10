@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "package": "npm run build && cd dist && zip -r ../my-lambda-cleanup.zip . && cd .. && zip -r my-lambda-cleanup.zip node_modules",
+    "clean": "rm -rf node_modules dist my-lambda-cleanup.zip",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
