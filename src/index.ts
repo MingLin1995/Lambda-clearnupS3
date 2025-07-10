@@ -90,7 +90,7 @@ async function processObject(
   bucketName: string,
   obj: any
 ): Promise<{ Key: string } | null> {
-  console.log("processObject start", obj.Key);
+  // console.log("processObject start", obj.Key);
   try {
     const headObjectResponse = await s3Client.send(
       new HeadObjectCommand({
@@ -111,7 +111,7 @@ async function processObject(
         return { Key: obj.Key! };
       }
     }
-    console.log("processObject: skip", obj.Key);
+    // console.log("processObject: skip", obj.Key);
     return null;
   } catch (err) {
     console.error("processObject error:", obj.Key, err);
