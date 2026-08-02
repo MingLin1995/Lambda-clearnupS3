@@ -56,10 +56,10 @@ async function processAllObjects(): Promise<number> {
         })
       );
       if (listObjectsResponse.Contents) {
-        const objectsToDelete = await Promise.all(
-          (listObjectsResponse.Contents ?? []).map((obj) =>
-            processObject(bucketName, obj)
-          )
+        const objectsToDelete = await processObjectsInBatches(
+          bucketName,
+          listObjectsResponse.Contents,
+          20
         );
         const filteredObjectsToDelete = objectsToDelete.filter(
           (obj) => obj !== null
@@ -81,6 +81,25 @@ async function processAllObjects(): Promise<number> {
 }
 
 /**
+ * 批次分流處理物件陣列，限制併發數 (Batch Chunking)，避免 N+1 請求過載與 S3 Rate Limit 限制
+ */
+async function processObjectsInBatches(
+  bucketName: string,
+  contents: any[],
+  batchSize = 20
+): Promise<({ Key: string } | null)[]> {
+  const results: ({ Key: string } | null)[] = [];
+  for (let i = 0; i < contents.length; i += batchSize) {
+    const batch = contents.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map((obj) => processObject(bucketName, obj))
+    );
+    results.push(...batchResults);
+  }
+  return results;
+}
+
+/**
  * 處理單個物件，決定是否需要刪除
  * @param bucketName S3 存儲桶名稱
  * @param obj S3 物件
@@ -90,28 +109,45 @@ async function processObject(
   bucketName: string,
   obj: any
 ): Promise<{ Key: string } | null> {
-  // console.log("processObject start", obj.Key);
+  if (!obj || !obj.Key) return null;
+
+  const now = new Date();
+  const uploadTime = obj.LastModified ? new Date(obj.LastModified) : new Date();
+  const fileAgeMs = now.getTime() - uploadTime.getTime();
+
+  // 1. 上傳未滿 24 小時的檔案，絕不可能為已過期的暫存檔，直接跳過 (省去 HEAD 請求)
+  if (fileAgeMs < oneDayInMs) {
+    return null;
+  }
+
+  // 2. 超過 7 天且非 PickupRequest/ 的檔案，代表早已確定寫入 DB 並轉為永久檔案，直接跳過 (省去 HEAD 請求)
+  const isPickupRequest = obj.Key.startsWith("PickupRequest/");
+  if (!isPickupRequest && fileAgeMs > 7 * oneDayInMs) {
+    return null;
+  }
+
+  // 3. 僅對需進一步確認元數據的檔案發送 HeadObjectCommand
   try {
     const headObjectResponse = await s3Client.send(
       new HeadObjectCommand({
         Bucket: bucketName,
-        Key: obj.Key!,
+        Key: obj.Key,
       })
     );
     const isTemporary = headObjectResponse.Metadata?.temporary === "true";
-    const uploadTime = new Date(headObjectResponse.LastModified!);
-    const now = new Date();
-    if (isTemporary && now.getTime() - uploadTime.getTime() > oneDayInMs) {
-      console.log("processObject: will delete temporary", obj.Key);
-      return { Key: obj.Key! };
-    } else if (obj.Key!.startsWith("PickupRequest/") && !isTemporary) {
-      const expirationDate = headObjectResponse.Metadata?.expirationDate;
+
+    if (isTemporary && fileAgeMs > oneDayInMs) {
+      console.log("processObject: will delete temporary file", obj.Key);
+      return { Key: obj.Key };
+    } else if (isPickupRequest && !isTemporary) {
+      const expirationDate =
+        headObjectResponse.Metadata?.expirationDate ||
+        headObjectResponse.Metadata?.expirationdate;
       if (expirationDate && now > new Date(expirationDate)) {
         console.log("processObject: will delete expired PickupRequest", obj.Key);
-        return { Key: obj.Key! };
+        return { Key: obj.Key };
       }
     }
-    // console.log("processObject: skip", obj.Key);
     return null;
   } catch (err) {
     console.error("processObject error:", obj.Key, err);
